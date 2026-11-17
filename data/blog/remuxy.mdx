@@ -1,0 +1,81 @@
+---
+title: 'remuxy: dublagem sincronizada no filme que você quiser'
+date: '2026-11-17'
+lastmod: '2026-11-17'
+tags: ['python', 'ffmpeg', 'tui', 'open-source', 'projetos']
+draft: false
+summary: 'Uma ferramenta de linha de comando e de terminal que copia a faixa de áudio de um filme para outro e cuida da sincronia: FPS, cortes diferentes e offsets.'
+images: ['/static/images/remuxy/tui.png']
+---
+
+<Image src="/static/images/remuxy/logo.png" alt="Logo do remuxY" width={1200} height={394} />
+
+## O problema
+
+Quem monta uma biblioteca de filmes conhece a situação: uma versão do filme tem a melhor imagem (4K, HDR, bitrate alto) e outra tem a dublagem em português. Juntar as duas parece simples, é só copiar a faixa de áudio de um arquivo para o outro. Na prática, quase sempre o resultado fica dessincronizado, porque versões diferentes do mesmo filme raramente são idênticas:
+
+- **FPS diferente:** 23.976, 24 ou 25 quadros por segundo. Entre 23.976 e 25 fps, o áudio de uma versão roda cerca de 4% mais rápido que o da outra, e no fim do filme a diferença passa de minutos.
+- **Cortes diferentes:** logos de estúdio, cenas a mais, uma introdução que existe em uma versão e não na outra.
+- **Offsets no container:** o áudio e o vídeo nem sempre começam no mesmo instante dentro do arquivo.
+
+Ajustar isso na mão, testando atrasos no player até achar o certo, é chato e impreciso. Então resolvi automatizar.
+
+## O remuxy
+
+O [remuxy](https://github.com/JeanPoffo/remuxy) é uma ferramenta open-source que copia a faixa de áudio de um filme (a **fonte**) para outro (o **destino**) e garante que ela fique sincronizada. A fonte pode ser outro filme ou só um arquivo de áudio (mp3, ac3, dts, flac...). O vídeo, as legendas e os áudios originais do destino ficam intactos; a dublagem entra como uma faixa a mais.
+
+Ele vem com dois comandos: `remux`, para a linha de comando, e `remuxy`, uma interface de terminal feita com [Textual](https://github.com/Textualize/textual):
+
+![Interface de terminal do remuxy](/static/images/remuxy/tui.png)
+
+Na interface você escolhe os arquivos, marca as opções e acompanha o progresso e o log do ffmpeg em tempo real. Na linha de comando, o caso mais comum fica assim:
+
+```bash
+remux dublado.mkv filme_4k.mkv --auto-sync --verify
+```
+
+## Como ele sincroniza
+
+A ideia central é modelar a posição do áudio no filme de destino como uma reta:
+
+```
+t_destino = a + b · t_fonte
+```
+
+`a` é o deslocamento em segundos e `b` é o fator de velocidade. O trabalho todo é descobrir esses dois números, e isso acontece em duas etapas.
+
+**1. Metadados.** Com o `ffprobe`, o remuxy lê o início de cada stream e o FPS dos dois vídeos. Só que o FPS informado engana: um DVD NTSC de filme costuma dizer que roda a 29.97 fps por causa do pulldown, mas o conteúdo é 23.976. Por isso ele considera as velocidades reais possíveis de cada lado e escolhe a combinação que bate com a duração dos arquivos. É assim que ele reconhece, por exemplo, o clássico _PAL speedup_ de 23.976 para 25 fps.
+
+**2. Medição pelo próprio áudio (`--auto-sync`).** Quando os cortes são diferentes, metadados não bastam. Então o remuxy compara o áudio da fonte com o áudio original do destino. Os diálogos de uma dublagem são diferentes do original, mas a **música e os efeitos sonoros** são os mesmos. O remuxy transforma os dois áudios em curvas de energia, deixa o canal central (onde fica a voz) de fora e faz uma correlação por FFT:
+
+- primeiro do filme inteiro, para cada velocidade candidata, o que encontra o atraso sem limite de busca;
+- depois em várias janelas espalhadas pelo filme, que **votam**: só vale o atraso em que a maioria concorda. Picos falsos caem em lugares aleatórios e não concordam entre si.
+
+Com isso ele detecta atraso constante, _drift_ (velocidades levemente diferentes) e até cortes diferentes, avisando qual trecho vai ficar fora de sincronia e por quanto.
+
+No fim, o `--verify` mede o arquivo gerado contra o áudio original. Até uns 40 ms é imperceptível; acima disso, ele avisa.
+
+## Pensado para o Plex e para a TV
+
+Boa parte do trabalho foi em detalhes que só aparecem na hora de assistir: um arquivo mal montado pode travar nos primeiros segundos em algumas TVs (as Samsung são conhecidas por isso) ou fazer o Plex transcodificar sem necessidade. Por isso o remuxy:
+
+- coloca a faixa nova **em primeiro lugar e como padrão**, porque o Plex só faz _Direct Play_ da primeira faixa;
+- **copia o áudio sem reencodar** quando ele já é AAC, AC3 ou E-AC3 e não há ajuste de velocidade, e reencoda em AAC quando precisa (DTS, por exemplo, que muitas TVs não tocam);
+- intercala corretamente áudio e vídeo dentro do arquivo, para TVs com buffer pequeno não travarem;
+- grava num arquivo oculto e só renomeia no fim, assim o Plex nunca escaneia um arquivo pela metade.
+
+## Como instalar
+
+Funciona em Linux com apt ou pacman. Uma linha instala o ffmpeg, o pipx e o remuxy:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JeanPoffo/remuxy/main/install.sh | bash
+```
+
+Depois é só abrir um terminal novo e rodar `remuxy`. Toda a documentação, com as opções e exemplos, está no [repositório do projeto](https://github.com/JeanPoffo/remuxy).
+
+## O que aprendi
+
+O que mais me surpreendeu foi como hoje é fácil fazer ferramentas locais com interface de terminal em Python: o Textual entrega campos, seletores, árvore de arquivos e até CSS prontos, e o NumPy resolve a parte matemática em poucas linhas. O resto é ffmpeg, que continua sendo o canivete suíço de qualquer coisa que envolva áudio e vídeo.
+
+O próximo passo é aproveitar o projeto como desculpa para aprender Go, reescrevendo a interface com o [Bubble Tea](https://github.com/charmbracelet/bubbletea). Mas isso fica para um próximo post. 🙂
