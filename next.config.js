@@ -66,6 +66,9 @@ module.exports = () => {
       dirs: ['app', 'components', 'layouts', 'scripts'],
     },
     images: {
+      // Serve the original files: the Netlify image function (IPX) fails to load sharp/libvips,
+      // which broke every next/image on the site.
+      unoptimized: true,
       remotePatterns: [
         {
           protocol: 'https',
